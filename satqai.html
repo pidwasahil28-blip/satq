@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SatQueryAI - Interactive Vision-Language Satellite Assistant</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Turf.js (Performs client-side PostGIS-grade geodesic area & geometry calculations) -->
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    .leaflet-container { background: #020617; }
+    /* Pulsing animation for dynamic AI bounding boxes */
+    @keyframes pulse-glow {
+      0%, 100% { fill-opacity: 0.35; stroke-width: 2px; }
+      50% { fill-opacity: 0.65; stroke-width: 3.5px; }
+    }
+    .ai-polygon-glow path {
+      animation: pulse-glow 2.5s infinite ease-in-out;
+    }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen w-screen overflow-hidden select-none">
+
+  <!-- TOP HEADER -->
+  <header class="h-14 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-5 flex items-center justify-between z-30">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center text-lg shadow-inner">
+        🛰️
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="font-bold tracking-tight text-white text-base">SatQuery<span class="text-emerald-400">AI</span></span>
+          <span class="text-[10px] uppercase font-bold tracking-wider bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800">
+            SIH 2026 Prototype
+          </span>
+          <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700 hidden sm:inline-block">
+            ISRO Bhuvan / Sentinel Multi-Sensor
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-4 text-xs font-mono">
+      <div class="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-full border border-slate-800">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        <span class="text-emerald-400 font-semibold">PostGIS + VLM Engine Active</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN WORKSPACE -->
+  <div class="flex-1 flex relative overflow-hidden">
+
+    <!-- SIDE CHAT & QUERY CONTROLLER -->
+    <aside class="w-96 bg-slate-900/95 backdrop-blur border-r border-slate-800 flex flex-col justify-between z-20 shadow-2xl">
+      
+      <!-- Panel Header & Quick Preset Prompts -->
+      <div class="p-3.5 border-b border-slate-800 bg-slate-900">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2.5 flex items-center justify-between">
+          <span>Preset Disaster & Agri Queries</span>
+          <span class="text-[10px] text-emerald-400 lowercase font-mono">click to run</span>
+        </h2>
+        <div class="grid grid-cols-1 gap-1.5">
+          <button onclick="loadScenario('flood')" class="text-left text-xs bg-slate-800/80 hover:bg-slate-700/80 p-2 rounded-md border border-slate-700 transition flex items-center justify-between group">
+            <span class="text-slate-200 group-hover:text-emerald-300 truncate">🌊 Brahmaputra Flood Inundation</span>
+            <span class="text-[10px] text-slate-500 font-mono">Assam</span>
+          </button>
+          <button onclick="loadScenario('drought')" class="text-left text-xs bg-slate-800/80 hover:bg-slate-700/80 p-2 rounded-md border border-slate-700 transition flex items-center justify-between group">
+            <span class="text-slate-200 group-hover:text-cyan-300 truncate">🌾 Marathwada Crop Stress & NDWI</span>
+            <span class="text-[10px] text-slate-500 font-mono">Maha</span>
+          </button>
+          <button onclick="loadScenario('urban')" class="text-left text-xs bg-slate-800/80 hover:bg-slate-700/80 p-2 rounded-md border border-slate-700 transition flex items-center justify-between group">
+            <span class="text-slate-200 group-hover:text-amber-300 truncate">🏗️ Bengaluru Wetland Encroachment</span>
+            <span class="text-[10px] text-slate-500 font-mono">Blr</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Chat History -->
+      <div id="chatHistory" class="flex-1 p-3.5 space-y-3 overflow-y-auto text-xs font-sans">
+        <!-- Initial Welcome Message -->
+        <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-emerald-400">SatQueryAI Assistant</span>
+            <span class="text-[10px] text-slate-500 font-mono">v1.0.4</span>
+          </div>
+          <p class="text-slate-300 leading-relaxed">
+            Ready for natural language spatial commands. You can ask me to locate submerged farmland, identify dried water reservoirs, or evaluate building encroachment on eco-sensitive wetlands.
+          </p>
+        </div>
+      </div>
+
+      <!-- Interactive Input Form -->
+      <div class="p-3 border-t border-slate-800 bg-slate-950/90">
+        <form id="queryForm" onsubmit="handleManualSubmit(event)" class="space-y-2">
+          <div class="relative">
+            <textarea
+              id="promptInput"
+              rows="2"
+              placeholder="e.g., Highlight all submerged zones and compute area in sq km..."
+              class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition resize-none font-sans"
+            ></textarea>
+          </div>
+          <div class="flex gap-2">
+            <button
+              type="submit"
+              id="submitBtn"
+              class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-2 rounded-lg text-xs transition flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/50"
+            >
+              <span>Execute Spatial Query</span>
+              <span>⚡</span>
+            </button>
+            <button
+              type="button"
+              onclick="clearMapLayers()"
+              class="px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition"
+              title="Clear Map"
+            >
+              Clear
+            </button>
+          </div>
+        </form>
+      </div>
+    </aside>
+
+    <!-- MAP CONTAINER -->
+    <main id="map" class="flex-1 h-full w-full relative z-10"></main>
+
+    <!-- FLOATING LIVE TELEMETRY & SPATIAL METRICS CARD (TOP RIGHT) -->
+    <div id="telemetryOverlay" class="absolute top-4 right-4 z-20 flex flex-col gap-2.5 pointer-events-auto">
+      
+      <!-- Primary Area Metric Card -->
+      <div class="bg-slate-900/90 backdrop-blur-md border border-slate-800 p-4 rounded-xl shadow-2xl w-72 transition-all duration-300">
+        <div class="flex items-center justify-between text-slate-400">
+          <span class="text-[11px] font-bold uppercase tracking-wider">Ground Truth Area</span>
+          <span class="text-[10px] font-mono bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400">ST_Area()</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-1.5">
+          <span id="calculatedArea" class="text-3xl font-bold font-mono text-emerald-400">--</span>
+          <span class="text-xs text-slate-400 font-sans">sq. kilometers</span>
+        </div>
+        <div class="mt-3 text-[11px] text-slate-400 grid grid-cols-2 gap-2 border-t border-slate-800/80 pt-2.5">
+          <div>
+            <span class="block text-[10px] text-slate-500 uppercase font-mono">Cadastral Plots</span>
+            <span id="plotCount" class="font-bold text-slate-200 text-xs">--</span>
+          </div>
+          <div>
+            <span class="block text-[10px] text-slate-500 uppercase font-mono">Severity Level</span>
+            <span id="severityBadge" class="font-bold text-slate-400 text-xs">Awaiting Query</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline Status Inspector Card -->
+      <div class="bg-slate-900/90 backdrop-blur-md border border-slate-800 p-3 rounded-xl shadow-2xl w-72 text-xs font-mono space-y-1.5">
+        <div class="flex justify-between items-center text-slate-400">
+          <span>Sensor Source:</span>
+          <span id="sensorType" class="text-slate-200">ISRO / Sentinel-2</span>
+        </div>
+        <div class="flex justify-between items-center text-slate-400">
+          <span>Spatial Query:</span>
+          <span id="sqlFunction" class="text-emerald-400">ST_Intersects()</span>
+        </div>
+        <div class="flex justify-between items-center text-slate-400">
+          <span>VLM Confidence:</span>
+          <span id="confidenceScore" class="text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center text-slate-400">
+          <span>Vector Output:</span>
+          <span id="vectorStatus" class="text-slate-400">Idle</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAP LEGEND -->
+    <div class="absolute bottom-6 right-4 z-20 bg-slate-900/90 backdrop-blur border border-slate-800 px-3.5 py-2.5 rounded-lg text-[11px] flex items-center gap-4">
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded-sm bg-cyan-500/60 border border-cyan-400"></span>
+        <span class="text-slate-300">Inundation / Water</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded-sm bg-amber-500/60 border border-amber-400"></span>
+        <span class="text-slate-300">Agricultural Stress</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded-sm bg-rose-500/60 border border-rose-400"></span>
+        <span class="text-slate-300">Urban Encroachment</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. INITIALIZE LEAFLET SATELLITE MAP
+    // ==========================================
+    const map = L.map('map', {
+      zoomControl: false,
+      attributionControl: false
+    }).setView([26.65, 93.35], 11);
+
+    // High-Resolution Satellite Base Layer (Esri World Imagery)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 18
+    }).addTo(map);
+
+    // Zoom buttons in top-left
+    L.control.zoom({ position: 'topleft' }).addTo(map);
+
+    let activeGeoJsonLayer = null;
+
+    // ==========================================
+    // 2. SCENARIO DATA STORE (GEOSPATIAL GEOJSONS)
+    // ==========================================
+    const scenarios = {
+      flood: {
+        title: "Brahmaputra Flood Inundation",
+        prompt: "Highlight all flooded agricultural parcels in the Kaziranga-Brahmaputra belt and calculate total submerged area.",
+        center: [26.65, 93.35],
+        zoom: 11,
+        sensor: "Sentinel-2 (B3, B8) + SAR",
+        plots: "118 Cadastral Plots",
+        severity: "CRITICAL",
+        severityColor: "text-rose-400",
+        confidence: "96.4%",
+        color: "#06b6d4",
+        responseSummary: "Identified severe inundation across the active flood basin. Normalized Difference Water Index (NDWI) reflectance indicates deep standing water exceeding standard riverbanks.",
+        geoJson: {
+          type: "Feature",
+          properties: { name: "Brahmaputra Flood Sector" },
+          geometry: {
+            type: "Polygon",
+            coordinates: [[
+              [93.25, 26.68],
+              [93.38, 26.71],
+              [93.48, 26.64],
+              [93.39, 26.59],
+              [93.28, 26.62],
+              [93.25, 26.68]
+            ]]
+          }
+        }
+      },
+      drought: {
+        title: "Marathwada Agricultural Drought Stress",
+        prompt: "Identify farmlands suffering severe vegetative moisture deficit and compute degraded acreage.",
+        center: [19.12, 76.55],
+        zoom: 12,
+        sensor: "Landsat-9 / Sentinel-2 NDVI",
+        plots: "342 Cadastral Plots",
+        severity: "MODERATE DEFICIT",
+        severityColor: "text-amber-400",
+        confidence: "92.8%",
+        color: "#f59e0b",
+        responseSummary: "Detected acute canopy dryness across non-irrigated farmland. Multi-spectral NDVI calculation indicates a 41% decline against the 5-year historical average.",
+        geoJson: {
+          type: "Feature",
+          properties: { name: "Marathwada Dry Sector" },
+          geometry: {
+            type: "Polygon",
+            coordinates: [[
+              [76.50, 19.10],
+              [76.60, 19.14],
+              [76.63, 19.08],
+              [76.54, 19.05],
+              [76.50, 19.10]
+            ]]
+          }
+        }
+      },
+      urban: {
+        title: "Bellandur Wetland Encroachment",
+        prompt: "Locate unauthorized construction polygons encroaching within the protected lake buffer boundaries.",
+        center: [12.935, 77.675],
+        zoom: 14,
+        sensor: "Cartosat-3 Optical (0.28m)",
+        plots: "23 Structural Units",
+        severity: "ILLEGAL VIOLATION",
+        severityColor: "text-rose-500",
+        confidence: "98.1%",
+        color: "#ef4444",
+        responseSummary: "High-resolution optical feature boundary detected concrete footprint expansion penetrating the 30-meter statutory buffer zone.",
+        geoJson: {
+          type: "Feature",
+          properties: { name: "Buffer Encroachment Zone" },
+          geometry: {
+            type: "Polygon",
+            coordinates: [[
+              [77.668, 12.938],
+              [77.679, 12.941],
+              [77.682, 12.934],
+              [77.671, 12.931],
+              [77.668, 12.938]
+            ]]
+          }
+        }
+      }
+    };
+
+    // ==========================================
+    // 3. CORE EXECUTION PIPELINE
+    // ==========================================
+    function loadScenario(type) {
+      const scenario = scenarios[type];
+      document.getElementById('promptInput').value = scenario.prompt;
+      triggerSpatialPipeline(scenario);
+    }
+
+    function handleManualSubmit(e) {
+      e.preventDefault();
+      const input = document.getElementById('promptInput').value.trim();
+      if (!input) return;
+
+      // Smart routing: Match user query to the most relevant scenario
+      const lower = input.toLowerCase();
+      if (lower.includes('drought') || lower.includes('crop') || lower.includes('dry') || lower.includes('farm')) {
+        triggerSpatialPipeline(scenarios.drought, input);
+      } else if (lower.includes('encroach') || lower.includes('urban') || lower.includes('lake') || lower.includes('build')) {
+        triggerSpatialPipeline(scenarios.urban, input);
+      } else {
+        triggerSpatialPipeline(scenarios.flood, input);
+      }
+    }
+
+    function triggerSpatialPipeline(scenario, customPrompt = null) {
+      const chat = document.getElementById('chatHistory');
+      const submitBtn = document.getElementById('submitBtn');
+
+      // 1. Post User Query in Chat
+      const userText = customPrompt || scenario.prompt;
+      const userBubble = `
+        <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700/80 text-slate-200">
+          <p class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1">User Query</p>
+          <p>${userText}</p>
+        </div>
+      `;
+      chat.innerHTML += userBubble;
+      chat.scrollTop = chat.scrollHeight;
+
+      // 2. Simulate AI Vision-Language Inference & Spatial Query Latency
+      submitBtn.innerHTML = `<span>Processing Remote Sensing Tile...</span>`;
+      submitBtn.classList.add('opacity-75', 'cursor-wait');
+
+      document.getElementById('vectorStatus').textContent = "Extracting Features...";
+      document.getElementById('vectorStatus').className = "text-amber-400 font-semibold";
+
+      setTimeout(() => {
+        // Compute Accurate Geodesic Ground Area using Turf.js (Mirrors PostGIS ST_Area)
+        const areaInSqMeters = turf.area(scenario.geoJson);
+        const areaInSqKm = (areaInSqMeters / 1000000).toFixed(2);
+
+        // Render Dynamic Polygon on Leaflet Map
+        clearMapLayers();
+
+        activeGeoJsonLayer = L.geoJSON(scenario.geoJson, {
+          className: 'ai-polygon-glow',
+          style: {
+            color: scenario.color,
+            weight: 2.5,
+            fillColor: scenario.color,
+            fillOpacity: 0.45,
+            dashArray: '5, 5'
+          }
+        }).addTo(map);
+
+        // Smooth Fly-To Animation
+        map.flyTo(scenario.center, scenario.zoom, { duration: 1.5 });
+
+        // Update Floating Telemetry Dashboard
+        document.getElementById('calculatedArea').textContent = areaInSqKm;
+        document.getElementById('plotCount').textContent = scenario.plots;
+        document.getElementById('severityBadge').textContent = scenario.severity;
+        document.getElementById('severityBadge').className = `font-bold text-xs ${scenario.severityColor}`;
+        document.getElementById('sensorType').textContent = scenario.sensor;
+        document.getElementById('confidenceScore').textContent = scenario.confidence;
+        document.getElementById('vectorStatus').textContent = "GeoJSON Vector Rendered";
+        document.getElementById('vectorStatus').className = "text-emerald-400 font-semibold";
+
+        // Append Assistant's Structured Response to Chat
+        const aiResponseBubble = `
+          <div class="bg-slate-950/80 p-3.5 rounded-xl border border-emerald-500/40 text-slate-200 space-y-2">
+            <div class="flex items-center justify-between text-[11px]">
+              <span class="font-bold text-emerald-400 flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> SatQueryAI Assistant
+              </span>
+              <span class="text-[10px] text-slate-400 font-mono">0.38s latency</span>
+            </div>
+            <p class="text-slate-300 leading-relaxed">${scenario.responseSummary}</p>
+            <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px] text-slate-400 space-y-0.5">
+              <div><span class="text-emerald-400">> ST_Area:</span> ${areaInSqKm} sq. km (${Math.round(areaInSqMeters).toLocaleString()} m²)</div>
+              <div><span class="text-emerald-400">> Cadastral Overlay:</span> ${scenario.plots} impacted</div>
+              <div><span class="text-emerald-400">> Confidence:</span> ${scenario.confidence}</div>
+            </div>
+          </div>
+        `;
+        chat.innerHTML += aiResponseBubble;
+        chat.scrollTop = chat.scrollHeight;
+
+        // Reset Button
+        submitBtn.innerHTML = `<span>Execute Spatial Query</span> <span>⚡</span>`;
+        submitBtn.classList.remove('opacity-75', 'cursor-wait');
+      }, 700);
+    }
+
+    function clearMapLayers() {
+      if (activeGeoJsonLayer) {
+        map.removeLayer(activeGeoJsonLayer);
+        activeGeoJsonLayer = null;
+      }
+      document.getElementById('calculatedArea').textContent = "--";
+      document.getElementById('plotCount').textContent = "--";
+      document.getElementById('severityBadge').textContent = "Awaiting Query";
+      document.getElementById('severityBadge').className = "font-bold text-slate-400 text-xs";
+      document.getElementById('vectorStatus').textContent = "Idle";
+      document.getElementById('vectorStatus').className = "text-slate-400";
+    }
+
+    // Auto-load default flood scenario on startup
+    window.addEventListener('load', () => {
+      setTimeout(() => loadScenario('flood'), 600);
+    });
+  </script>
+</body>
+</html>
